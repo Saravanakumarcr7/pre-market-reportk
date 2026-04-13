@@ -1,10 +1,13 @@
+"""
+Data fetcher using multiple sources:
+  - yfinance   → Index data (NIFTY, SENSEX, VIX, Bank NIFTY)
+  - Groww API  → Option chain (OI, LTP, volume for all strikes)
+  - NSE API    → FII/DII activity
+"""
 import requests
 import time
 import json
-import re
-from datetime import datetime
-from bs4 import BeautifulSoup
-from config import NSE_FII_DII_URL, GIFT_NIFTY_URL
+from config import NSE_FII_DII_URL
 
 try:
     import yfinance as yf
@@ -13,50 +16,34 @@ except ImportError:
     HAS_YFINANCE = False
 
 
-def _nse_session():
-    """Create a requests session with proper NSE headers."""
-    session = requests.Session()
-    session.headers.update({
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/javascript, */*; q=0.01",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br, zstd",
-        "Referer": "https://www.nseindia.com/option-chain",
-        "X-Requested-With": "XMLHttpRequest",
-    })
-    try:
-        session.get("https://www.nseindia.com", timeout=10)
-    except Exception:
-        pass
-    time.sleep(0.3)
-    return session
+GROWW_OPTION_CHAIN_URL = "https://groww.in/v1/api/option_chain_service/v1/option_chain/{symbol}"
+GROWW_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+}
+
+NSE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "Accept": "*/*",
+    "Referer": "https://www.nseindia.com/",
+}
 
 
 class NSEFetcher:
-    """Fetches market data using Yahoo Finance (primary) + NSE (fallback)."""
+    """Fetches market data from yfinance + Groww + NSE."""
 
     def __init__(self):
-        self.nse_session = _nse_session()
+        self._groww_session = requests.Session()
+        self._groww_session.headers.update(GROWW_HEADERS)
+        self._nse_session = requests.Session()
+        self._nse_session.headers.update(NSE_HEADERS)
+        # Warm up NSE session for cookies
+        try:
+            self._nse_session.get("https://www.nseindia.com", timeout=10)
+        except Exception:
+            pass
 
-    def _nse_get(self, url, retries=2):
-        """GET request to NSE with retry."""
-        for attempt in range(retries + 1):
-            try:
-                r = self.nse_session.get(url, timeout=15)
-                if r.status_code in (401, 403):
-                    self.nse_session = _nse_session()
-                    continue
-                r.raise_for_status()
-                return r.json()
-            except Exception:
-                if attempt < retries:
-                    self.nse_session = _nse_session()
-                    time.sleep(1)
-                    continue
-                return None
-        return None
-
-    # ── INDEX DATA (Yahoo Finance — works reliably) ──────────────────────
+    # ── INDEX DATA (yfinance) ───────────────────────────────────────────
 
     def get_index_data(self, index_name="NIFTY 50"):
         """Fetch index OHLC data via Yahoo Finance."""
@@ -79,7 +66,9 @@ class NSEFetcher:
                 "high": round(info.day_high, 2),
                 "low": round(info.day_low, 2),
                 "change": round(info.last_price - info.previous_close, 2),
-                "pChange": round(((info.last_price - info.previous_close) / info.previous_close) * 100, 2),
+                "pChange": round(
+                    ((info.last_price - info.previous_close) / info.previous_close) * 100, 2
+                ),
             }
         except Exception:
             return None
@@ -105,35 +94,99 @@ class NSEFetcher:
         except Exception:
             return None
 
-    # ── OPTION CHAIN (NSE API — may fail on cloud) ───────────────────────
+    # ── OPTION CHAIN (Groww web scraping) ───────────────────────────────
 
     def get_option_chain(self, symbol="NIFTY"):
-        """Fetch option chain from NSE. Works locally, may fail on cloud."""
-        # Try nsepython first
+        """
+        Scrape option chain from Groww internal API.
+        Converts Groww format → NSE-compatible format for calculations.py.
+        """
+        groww_symbol = symbol.lower()  # groww uses lowercase: nifty, banknifty
+        if groww_symbol == "banknifty" or groww_symbol == "nifty bank":
+            groww_symbol = "banknifty"
+
+        url = GROWW_OPTION_CHAIN_URL.format(symbol=groww_symbol)
         try:
-            from nsepython import nse_optionchain_scrapper
-            data = nse_optionchain_scrapper(symbol)
-            if isinstance(data, str):
-                data = json.loads(data)
-            if data and data.get("records", {}).get("data"):
-                return data
+            r = self._groww_session.get(url, timeout=15)
+            if r.status_code != 200:
+                return None
+
+            groww_data = r.json()
+            chains = groww_data.get("optionChain", {}).get("optionChains", [])
+            if not chains:
+                return None
+
+            # Get spot price from yfinance (more reliable)
+            spot_price = 0
+            if HAS_YFINANCE:
+                try:
+                    sym = "^NSEI" if "nifty" in groww_symbol else "^NSEBANK"
+                    spot_price = round(yf.Ticker(sym).fast_info.last_price, 2)
+                except Exception:
+                    pass
+
+            # Convert Groww format → NSE-compatible format
+            nse_records = []
+            for chain in chains:
+                strike_raw = chain.get("strikePrice", 0)
+                strike = strike_raw / 100  # Groww stores x100
+
+                call = chain.get("callOption", {})
+                put = chain.get("putOption", {})
+
+                record = {"strikePrice": strike}
+
+                if call:
+                    call_oi = call.get("openInterest", 0)
+                    call_prev_oi = call.get("prevOpenInterest", 0)
+                    record["CE"] = {
+                        "strikePrice": strike,
+                        "openInterest": call_oi,
+                        "changeinOpenInterest": call_oi - call_prev_oi,
+                        "lastPrice": call.get("ltp", 0),
+                        "totalTradedVolume": call.get("volume", 0),
+                        "change": call.get("dayChange", 0),
+                        "pChange": call.get("dayChangePerc", 0),
+                        "impliedVolatility": 0,
+                    }
+
+                if put:
+                    put_oi = put.get("openInterest", 0)
+                    put_prev_oi = put.get("prevOpenInterest", 0)
+                    record["PE"] = {
+                        "strikePrice": strike,
+                        "openInterest": put_oi,
+                        "changeinOpenInterest": put_oi - put_prev_oi,
+                        "lastPrice": put.get("ltp", 0),
+                        "totalTradedVolume": put.get("volume", 0),
+                        "change": put.get("dayChange", 0),
+                        "pChange": put.get("dayChangePerc", 0),
+                        "impliedVolatility": 0,
+                    }
+
+                nse_records.append(record)
+
+            # Build NSE-compatible wrapper
+            return {
+                "records": {
+                    "data": nse_records,
+                    "underlyingValue": spot_price,
+                },
+                "source": "groww",
+            }
+
         except Exception:
-            pass
+            return None
 
-        # Fallback: direct NSE API
-        url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
-        data = self._nse_get(url)
-        if data and data.get("records", {}).get("data"):
-            return data
-
-        return None
-
-    # ── FII/DII DATA (NSE API — works reliably even on cloud) ────────────
+    # ── FII/DII DATA (NSE API) ──────────────────────────────────────────
 
     def get_fii_dii_data(self):
-        """Fetch FII/DII trading activity."""
-        data = self._nse_get(NSE_FII_DII_URL)
-        if data:
+        """Fetch FII/DII trading activity from NSE."""
+        try:
+            r = self._nse_session.get(NSE_FII_DII_URL, timeout=15)
+            if r.status_code != 200 or not r.text.strip():
+                return None
+            data = r.json()
             result = {"fii": {}, "dii": {}}
             items = data if isinstance(data, list) else [data]
             for item in items:
@@ -154,60 +207,18 @@ class NSEFetcher:
                     }
             if result["fii"] or result["dii"]:
                 return result
+        except Exception:
+            pass
         return None
 
-    # ── GIFT NIFTY (Web Scraping) ────────────────────────────────────────
+    # ── GIFT NIFTY (not available via free APIs) ────────────────────────
 
     def get_gift_nifty(self):
-        """Scrape GIFT Nifty value from Google Finance."""
-        try:
-            # Try Google Finance
-            url = "https://www.google.com/finance/quote/NIFTY_50:INDEXNSE"
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            r = requests.get(url, headers=headers, timeout=10)
-            soup = BeautifulSoup(r.text, "lxml")
-
-            # Google Finance shows price in a specific div
-            price_el = soup.select_one('[data-last-price]')
-            if price_el:
-                val = float(price_el['data-last-price'])
-                if 15000 < val < 35000:
-                    return {"price": val, "source": "google"}
-        except Exception:
-            pass
-
-        # Fallback: Groww
-        try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            r = requests.get(GIFT_NIFTY_URL, headers=headers, timeout=10)
-            soup = BeautifulSoup(r.text, "lxml")
-            for script in soup.find_all("script"):
-                text = script.string or ""
-                if "ltp" in text:
-                    matches = re.findall(r'"ltp"\s*:\s*"?([\d,.]+)"?', text)
-                    for m in matches:
-                        val = float(m.replace(",", ""))
-                        if 15000 < val < 35000:
-                            return {"price": val, "source": "groww"}
-        except Exception:
-            pass
-
+        """GIFT Nifty not reliably available via free APIs."""
         return None
 
+    # ── NIFTY FUTURES (derived from synthetic futures) ──────────────────
+
     def get_nifty_futures(self):
-        """Fetch Nifty futures data."""
-        url = "https://www.nseindia.com/api/liveEquity-derivatives?index=nse50_fut"
-        data = self._nse_get(url)
-        if data and "data" in data:
-            for item in data["data"]:
-                if "NIFTY" in item.get("symbol", "").upper():
-                    return {
-                        "ltp": item.get("lastPrice", 0),
-                        "open": item.get("openPrice", 0),
-                        "high": item.get("highPrice", 0),
-                        "low": item.get("lowPrice", 0),
-                        "prev_close": item.get("prevClose", 0),
-                        "oi": item.get("openInterest", 0),
-                        "change_oi": item.get("changeinOpenInterest", 0),
-                    }
+        """Futures data not available via free scraping. Uses synthetic instead."""
         return None

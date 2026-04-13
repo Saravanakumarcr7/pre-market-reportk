@@ -276,7 +276,7 @@ def main():
     st.markdown(glass_card(hdr), unsafe_allow_html=True)
 
     # Load data
-    with st.spinner("Fetching live data from NSE..."):
+    with st.spinner("Fetching live market data..."):
         data = load_all_data()
 
     nifty_chain = data["nifty_chain"]
@@ -535,8 +535,8 @@ def main():
             fig_chg = go.Figure()
 
             # Color bars based on positive/negative change
-            call_chg_colors = ["#ff4444" if v > 0 else "#ff444466" for v in f_call_chg]
-            put_chg_colors = ["#00ff88" if v > 0 else "#00ff8866" for v in f_put_chg]
+            call_chg_colors = ["#ff4444" if v > 0 else "rgba(255,68,68,0.4)" for v in f_call_chg]
+            put_chg_colors = ["#00ff88" if v > 0 else "rgba(0,255,136,0.4)" for v in f_put_chg]
 
             fig_chg.add_trace(go.Bar(
                 x=strike_labels, y=f_call_chg,
@@ -777,13 +777,16 @@ def main():
     """
 
     if key_support and key_resistance:
-        final_html += f"""
-        <div style="margin-top:0.8rem; padding:0.6rem; background:rgba(255,170,0,0.05); border:1px solid rgba(255,170,0,0.2); border-radius:8px;">
-            <div style="font-size:0.75rem; color:#ffaa00;">
-                INVALIDATION: {'Close below ' + key_support + ' = Abandon bullish view' if market_bias['bias'] == 'BULLISH' else 'Close above ' + key_resistance + ' = Abandon bearish view' if market_bias['bias'] == 'BEARISH' else 'Break of ' + key_support + ' or ' + key_resistance + ' = Trend emerging'}
-            </div>
-        </div>
-        """
+        if market_bias["bias"] == "BULLISH":
+            inv_text = "Close below " + key_support + " = Abandon bullish view"
+        elif market_bias["bias"] == "BEARISH":
+            inv_text = "Close above " + key_resistance + " = Abandon bearish view"
+        else:
+            inv_text = "Break of " + key_support + " or " + key_resistance + " = Trend emerging"
+
+        final_html += '<div style="margin-top:0.8rem; padding:0.6rem; background:rgba(255,170,0,0.05); border:1px solid rgba(255,170,0,0.2); border-radius:8px;">'
+        final_html += '<div style="font-size:0.75rem; color:#ffaa00;">INVALIDATION: ' + inv_text + '</div>'
+        final_html += '</div>'
 
     st.markdown(glass_card(final_html), unsafe_allow_html=True)
 
