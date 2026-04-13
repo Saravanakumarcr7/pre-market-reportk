@@ -316,8 +316,14 @@ def main():
     basis = calculate_basis(futures_price, spot_price) if futures_price and spot_price else None
 
     # ── SECTION 1: MARKET SUMMARY ────────────────────────────────────────
-    st.markdown(glass_card(f"""
-        {section_title("1. MARKET SUMMARY")}
+    conf_color = "#00ff88" if market_bias["confidence"] == "High" else "#ffaa00" if market_bias["confidence"] == "Medium" else "#ff4444"
+    gift_html = ""
+    if gift_data:
+        gift_html = f'<div><div class="metric-label">GIFT Nifty</div><div style="font-size:1rem; color:#00d4ff;">{gift_data["price"]:,.2f}</div></div>'
+    reasons_html = "".join(f'<div class="reason-item">{r}</div>' for r in market_bias["reasons"])
+
+    summary_html = section_title("1. MARKET SUMMARY")
+    summary_html += f"""
         <div style="display:flex; gap:2rem; align-items:center; flex-wrap:wrap;">
             <div>
                 <div class="metric-label">Overall Bias</div>
@@ -325,9 +331,7 @@ def main():
             </div>
             <div>
                 <div class="metric-label">Confidence</div>
-                <div class="metric-value" style="font-size:1.2rem; color:{'#00ff88' if market_bias['confidence']=='High' else '#ffaa00' if market_bias['confidence']=='Medium' else '#ff4444'}">
-                    {market_bias['confidence']}
-                </div>
+                <div class="metric-value" style="font-size:1.2rem; color:{conf_color};">{market_bias['confidence']}</div>
             </div>
             <div>
                 <div class="metric-label">NIFTY Spot</div>
@@ -337,12 +341,11 @@ def main():
                 <div class="metric-label">Prev Close</div>
                 <div style="font-size:1rem; color:#aaa;">{prev_close:,.2f}</div>
             </div>
-            {'<div><div class="metric-label">GIFT Nifty</div><div style="font-size:1rem; color:#00d4ff;">' + f"{gift_data['price']:,.2f}" + '</div></div>' if gift_data else ''}
+            {gift_html}
         </div>
-        <div style="margin-top:0.8rem;">
-            {''.join(f'<div class="reason-item">{r}</div>' for r in market_bias['reasons'])}
-        </div>
-    """), unsafe_allow_html=True)
+        <div style="margin-top:0.8rem;">{reasons_html}</div>
+    """
+    st.markdown(glass_card(summary_html), unsafe_allow_html=True)
 
     # ── SECTION 2 & 3: FII/DII + VIX (side by side) ─────────────────────
     col_fii, col_vix = st.columns(2)
