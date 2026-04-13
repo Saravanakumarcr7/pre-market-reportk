@@ -253,25 +253,27 @@ def main():
     status_color = status_colors.get(mkt_status, "#888")
 
     # Header
-    st.markdown(glass_card(f"""
-        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap;">
-            <div>
-                <div style="font-size:1.4rem; font-weight:700; color:#00d4ff;">
-                    PRE-MARKET DERIVATIVES DASHBOARD
-                </div>
-                <div style="font-size:0.75rem; color:#666; margin-top:0.2rem;">
-                    NIFTY &middot; SENSEX &middot; India Derivatives
-                </div>
-            </div>
-            <div style="text-align:right;">
-                <div style="display:inline-block; padding:0.2rem 0.8rem; border-radius:12px; background:rgba({','.join(str(int(status_color.lstrip('#')[i:i+2], 16)) for i in (0, 2, 4))},0.15); border:1px solid {status_color}; margin-bottom:0.3rem;">
-                    <span style="font-size:0.7rem; color:{status_color}; font-weight:600;">{mkt_status}</span>
-                </div>
-                <div style="font-size:0.7rem; color:#666;">{mkt_msg}</div>
-                <div style="font-size:0.75rem; color:#aaa; margin-top:0.2rem;">{datetime.now().strftime("%d %b %Y, %I:%M %p")}</div>
-            </div>
-        </div>
-    """), unsafe_allow_html=True)
+    hex_c = status_color.lstrip('#')
+    r_val = int(hex_c[0:2], 16)
+    g_val = int(hex_c[2:4], 16)
+    b_val = int(hex_c[4:6], 16)
+    rgba_bg = f"rgba({r_val},{g_val},{b_val},0.15)"
+    now_str = datetime.now().strftime("%d %b %Y, %I:%M %p")
+
+    hdr = '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;">'
+    hdr += '<div>'
+    hdr += '<div style="font-size:1.4rem;font-weight:700;color:#00d4ff;">PRE-MARKET DERIVATIVES DASHBOARD</div>'
+    hdr += '<div style="font-size:0.75rem;color:#666;margin-top:0.2rem;">NIFTY &middot; SENSEX &middot; India Derivatives</div>'
+    hdr += '</div>'
+    hdr += '<div style="text-align:right;">'
+    hdr += '<div style="display:inline-block;padding:0.2rem 0.8rem;border-radius:12px;background:' + rgba_bg + ';border:1px solid ' + status_color + ';margin-bottom:0.3rem;">'
+    hdr += '<span style="font-size:0.7rem;color:' + status_color + ';font-weight:600;">' + mkt_status + '</span>'
+    hdr += '</div>'
+    hdr += '<div style="font-size:0.7rem;color:#666;">' + mkt_msg + '</div>'
+    hdr += '<div style="font-size:0.75rem;color:#aaa;margin-top:0.2rem;">' + now_str + '</div>'
+    hdr += '</div></div>'
+
+    st.markdown(glass_card(hdr), unsafe_allow_html=True)
 
     # Load data
     with st.spinner("Fetching live data from NSE..."):
@@ -319,35 +321,26 @@ def main():
 
     # ── SECTION 1: MARKET SUMMARY ────────────────────────────────────────
     conf_color = "#00ff88" if market_bias["confidence"] == "High" else "#ffaa00" if market_bias["confidence"] == "Medium" else "#ff4444"
-    gift_html = ""
+    gift_part = ""
     if gift_data:
-        gift_html = f'<div><div class="metric-label">GIFT Nifty</div><div style="font-size:1rem; color:#00d4ff;">{gift_data["price"]:,.2f}</div></div>'
-    reasons_html = "".join(f'<div class="reason-item">{r}</div>' for r in market_bias["reasons"])
+        gift_part = '<div><div class="metric-label">GIFT Nifty</div><div style="font-size:1rem; color:#00d4ff;">' + f'{gift_data["price"]:,.2f}' + '</div></div>'
 
-    summary_html = section_title("1. MARKET SUMMARY")
-    summary_html += f"""
-        <div style="display:flex; gap:2rem; align-items:center; flex-wrap:wrap;">
-            <div>
-                <div class="metric-label">Overall Bias</div>
-                <div style="margin-top:0.3rem;">{bias_badge(market_bias['bias'])}</div>
-            </div>
-            <div>
-                <div class="metric-label">Confidence</div>
-                <div class="metric-value" style="font-size:1.2rem; color:{conf_color};">{market_bias['confidence']}</div>
-            </div>
-            <div>
-                <div class="metric-label">NIFTY Spot</div>
-                <div class="metric-value" style="color:#fff;">{spot_price:,.2f}</div>
-            </div>
-            <div>
-                <div class="metric-label">Prev Close</div>
-                <div style="font-size:1rem; color:#aaa;">{prev_close:,.2f}</div>
-            </div>
-            {gift_html}
-        </div>
-        <div style="margin-top:0.8rem;">{reasons_html}</div>
-    """
-    st.markdown(glass_card(summary_html), unsafe_allow_html=True)
+    reasons_parts = []
+    for r in market_bias["reasons"]:
+        reasons_parts.append('<div class="reason-item">' + str(r) + '</div>')
+    reasons_joined = "".join(reasons_parts)
+
+    s1 = '<div class="section-title">1. MARKET SUMMARY</div>'
+    s1 += '<div style="display:flex;gap:2rem;align-items:center;flex-wrap:wrap;">'
+    s1 += '<div><div class="metric-label">Overall Bias</div><div style="margin-top:0.3rem;">' + bias_badge(market_bias['bias']) + '</div></div>'
+    s1 += '<div><div class="metric-label">Confidence</div><div class="metric-value" style="font-size:1.2rem;color:' + conf_color + ';">' + market_bias['confidence'] + '</div></div>'
+    s1 += '<div><div class="metric-label">NIFTY Spot</div><div class="metric-value" style="color:#fff;">' + f'{spot_price:,.2f}' + '</div></div>'
+    s1 += '<div><div class="metric-label">Prev Close</div><div style="font-size:1rem;color:#aaa;">' + f'{prev_close:,.2f}' + '</div></div>'
+    s1 += gift_part
+    s1 += '</div>'
+    s1 += '<div style="margin-top:0.8rem;">' + reasons_joined + '</div>'
+
+    st.markdown(glass_card(s1), unsafe_allow_html=True)
 
     # ── SECTION 2 & 3: FII/DII + VIX (side by side) ─────────────────────
     col_fii, col_vix = st.columns(2)
