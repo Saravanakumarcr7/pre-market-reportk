@@ -1,4 +1,3 @@
-NSE_FII_DII_URL = "https://www.nseindia.com/api/fiidiiTradeReact"
 
 NIFTY_STRIKE_INTERVAL = 50
 SENSEX_STRIKE_INTERVAL = 100

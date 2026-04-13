@@ -1,13 +1,11 @@
 """
 Data fetcher using multiple sources:
   - yfinance   → Index data (NIFTY, SENSEX, VIX, Bank NIFTY)
-  - Groww API  → Option chain (OI, LTP, volume for all strikes)
-  - NSE API    → FII/DII activity
+  - Groww      → Option chain + FII/DII activity (web scraping)
 """
 import requests
-import time
+import re
 import json
-from config import NSE_FII_DII_URL
 
 try:
     import yfinance as yf
@@ -17,31 +15,19 @@ except ImportError:
 
 
 GROWW_OPTION_CHAIN_URL = "https://groww.in/v1/api/option_chain_service/v1/option_chain/{symbol}"
+GROWW_FII_DII_URL = "https://groww.in/fii-dii-data"
 GROWW_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
     "Accept": "application/json",
 }
 
-NSE_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    "Accept": "*/*",
-    "Referer": "https://www.nseindia.com/",
-}
-
 
 class NSEFetcher:
-    """Fetches market data from yfinance + Groww + NSE."""
+    """Fetches market data from yfinance + Groww (no NSE dependency)."""
 
     def __init__(self):
         self._groww_session = requests.Session()
         self._groww_session.headers.update(GROWW_HEADERS)
-        self._nse_session = requests.Session()
-        self._nse_session.headers.update(NSE_HEADERS)
-        # Warm up NSE session for cookies
-        try:
-            self._nse_session.get("https://www.nseindia.com", timeout=10)
-        except Exception:
-            pass
 
     # ── INDEX DATA (yfinance) ───────────────────────────────────────────
 
@@ -178,33 +164,54 @@ class NSEFetcher:
         except Exception:
             return None
 
-    # ── FII/DII DATA (NSE API) ──────────────────────────────────────────
+    # ── FII/DII DATA (Groww web scraping) ─────────────────────────────
 
     def get_fii_dii_data(self):
-        """Fetch FII/DII trading activity from NSE."""
+        """Scrape FII/DII trading activity from Groww."""
         try:
-            r = self._nse_session.get(NSE_FII_DII_URL, timeout=15)
-            if r.status_code != 200 or not r.text.strip():
+            r = self._groww_session.get(
+                GROWW_FII_DII_URL,
+                headers={"Accept": "text/html"},
+                timeout=15,
+            )
+            if r.status_code != 200:
                 return None
-            data = r.json()
+
+            # Extract __NEXT_DATA__ JSON embedded in the page
+            match = re.search(
+                r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>',
+                r.text,
+                re.DOTALL,
+            )
+            if not match:
+                return None
+
+            page_data = json.loads(match.group(1))
+            records = page_data.get("props", {}).get("pageProps", {}).get("initialData", [])
+            if not records:
+                return None
+
+            # Most recent record is first
+            latest = records[0]
+            fii = latest.get("fii", {})
+            dii = latest.get("dii", {})
+            date_str = latest.get("date", "")
+
             result = {"fii": {}, "dii": {}}
-            items = data if isinstance(data, list) else [data]
-            for item in items:
-                category = item.get("category", "").upper()
-                if "FII" in category or "FPI" in category:
-                    result["fii"] = {
-                        "buy_value": item.get("buyValue", 0),
-                        "sell_value": item.get("sellValue", 0),
-                        "net_value": item.get("netValue", 0),
-                        "date": item.get("date", ""),
-                    }
-                elif "DII" in category:
-                    result["dii"] = {
-                        "buy_value": item.get("buyValue", 0),
-                        "sell_value": item.get("sellValue", 0),
-                        "net_value": item.get("netValue", 0),
-                        "date": item.get("date", ""),
-                    }
+            if fii:
+                result["fii"] = {
+                    "buy_value": fii.get("grossBuy", 0),
+                    "sell_value": fii.get("grossSell", 0),
+                    "net_value": fii.get("netBuySell", 0),
+                    "date": date_str,
+                }
+            if dii:
+                result["dii"] = {
+                    "buy_value": dii.get("grossBuy", 0),
+                    "sell_value": dii.get("grossSell", 0),
+                    "net_value": dii.get("netBuySell", 0),
+                    "date": date_str,
+                }
             if result["fii"] or result["dii"]:
                 return result
         except Exception:
