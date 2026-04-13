@@ -1,5 +1,7 @@
 import streamlit as st
 import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from datetime import datetime, time as dtime
 from data_fetcher import NSEFetcher
 from calculations import (
@@ -452,6 +454,133 @@ def main():
     else:
         oi_html += '<div style="color:#666; font-size:0.8rem;">Option chain data unavailable</div>'
     st.markdown(glass_card(oi_html), unsafe_allow_html=True)
+
+    # ── LIVE OI BAR CHARTS ───────────────────────────────────────────────
+    if nifty_chain and nifty_chain.get("records", {}).get("data"):
+        records = nifty_chain["records"]["data"]
+        oi_strikes = []
+        call_oi_list = []
+        put_oi_list = []
+        call_oi_chg_list = []
+        put_oi_chg_list = []
+
+        for r in records:
+            strike = r["strikePrice"]
+            ce = r.get("CE")
+            pe = r.get("PE")
+            c_oi = ce.get("openInterest", 0) if ce else 0
+            p_oi = pe.get("openInterest", 0) if pe else 0
+            c_chg = ce.get("changeinOpenInterest", 0) if ce else 0
+            p_chg = pe.get("changeinOpenInterest", 0) if pe else 0
+
+            if c_oi > 0 or p_oi > 0:
+                oi_strikes.append(strike)
+                call_oi_list.append(c_oi)
+                put_oi_list.append(p_oi)
+                call_oi_chg_list.append(c_chg)
+                put_oi_chg_list.append(p_chg)
+
+        if oi_strikes:
+            # Filter to +/- 15 strikes around ATM for clarity
+            atm = min(oi_strikes, key=lambda x: abs(x - spot_price)) if spot_price else oi_strikes[len(oi_strikes) // 2]
+            margin = 15
+            atm_idx = oi_strikes.index(atm)
+            lo = max(0, atm_idx - margin)
+            hi = min(len(oi_strikes), atm_idx + margin + 1)
+
+            f_strikes = oi_strikes[lo:hi]
+            f_call_oi = call_oi_list[lo:hi]
+            f_put_oi = put_oi_list[lo:hi]
+            f_call_chg = call_oi_chg_list[lo:hi]
+            f_put_chg = put_oi_chg_list[lo:hi]
+
+            strike_labels = [str(int(s)) for s in f_strikes]
+
+            # ── Chart 1: Total OI ────────────────────────────────────────
+            st.markdown(glass_card(section_title("LIVE OI — TOTAL OPEN INTEREST")), unsafe_allow_html=True)
+
+            fig_oi = go.Figure()
+            fig_oi.add_trace(go.Bar(
+                x=strike_labels, y=f_call_oi,
+                name="Call OI", marker_color="#ff4444",
+                opacity=0.85, text=[f"{v:,.0f}" for v in f_call_oi],
+                textposition="outside", textfont=dict(size=8, color="#ff6666"),
+            ))
+            fig_oi.add_trace(go.Bar(
+                x=strike_labels, y=f_put_oi,
+                name="Put OI", marker_color="#00ff88",
+                opacity=0.85, text=[f"{v:,.0f}" for v in f_put_oi],
+                textposition="outside", textfont=dict(size=8, color="#66ffaa"),
+            ))
+            # ATM line
+            if str(int(atm)) in strike_labels:
+                atm_pos = strike_labels.index(str(int(atm)))
+                fig_oi.add_vline(
+                    x=atm_pos, line_dash="dash", line_color="#00d4ff", line_width=2,
+                    annotation_text=f"ATM {int(atm)}", annotation_font_color="#00d4ff",
+                    annotation_font_size=10,
+                )
+
+            fig_oi.update_layout(
+                barmode="group",
+                template="plotly_dark",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="JetBrains Mono, monospace", size=10, color="#aaa"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                            font=dict(size=10)),
+                margin=dict(l=40, r=20, t=30, b=40),
+                height=380,
+                xaxis=dict(title="Strike Price", gridcolor="rgba(255,255,255,0.05)", tickangle=-45),
+                yaxis=dict(title="Open Interest", gridcolor="rgba(255,255,255,0.05)"),
+            )
+            st.plotly_chart(fig_oi, use_container_width=True)
+
+            # ── Chart 2: OI Change ───────────────────────────────────────
+            st.markdown(glass_card(section_title("LIVE OI — CHANGE IN OPEN INTEREST")), unsafe_allow_html=True)
+
+            fig_chg = go.Figure()
+
+            # Color bars based on positive/negative change
+            call_chg_colors = ["#ff4444" if v > 0 else "#ff444466" for v in f_call_chg]
+            put_chg_colors = ["#00ff88" if v > 0 else "#00ff8866" for v in f_put_chg]
+
+            fig_chg.add_trace(go.Bar(
+                x=strike_labels, y=f_call_chg,
+                name="Call OI Change", marker_color=call_chg_colors,
+                opacity=0.9,
+            ))
+            fig_chg.add_trace(go.Bar(
+                x=strike_labels, y=f_put_chg,
+                name="Put OI Change", marker_color=put_chg_colors,
+                opacity=0.9,
+            ))
+
+            if str(int(atm)) in strike_labels:
+                atm_pos = strike_labels.index(str(int(atm)))
+                fig_chg.add_vline(
+                    x=atm_pos, line_dash="dash", line_color="#00d4ff", line_width=2,
+                    annotation_text=f"ATM {int(atm)}", annotation_font_color="#00d4ff",
+                    annotation_font_size=10,
+                )
+
+            # Zero line
+            fig_chg.add_hline(y=0, line_color="rgba(255,255,255,0.2)", line_width=1)
+
+            fig_chg.update_layout(
+                barmode="group",
+                template="plotly_dark",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="JetBrains Mono, monospace", size=10, color="#aaa"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+                            font=dict(size=10)),
+                margin=dict(l=40, r=20, t=30, b=40),
+                height=380,
+                xaxis=dict(title="Strike Price", gridcolor="rgba(255,255,255,0.05)", tickangle=-45),
+                yaxis=dict(title="OI Change", gridcolor="rgba(255,255,255,0.05)"),
+            )
+            st.plotly_chart(fig_chg, use_container_width=True)
 
     # ── SECTION 5 & 6: TECHNICAL LEVELS + PCR (side by side) ─────────────
     col_tech, col_pcr = st.columns(2)
