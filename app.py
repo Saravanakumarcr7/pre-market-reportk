@@ -222,7 +222,7 @@ def load_all_data():
 
     nifty_chain = fetcher.get_option_chain("NIFTY")
     nifty_index = fetcher.get_index_data("NIFTY 50")
-    sensex_index = fetcher.get_index_data("NIFTY FINANCIAL SERVICES")  # fallback
+    sensex_index = fetcher.get_index_data("SENSEX")
     vix_data = fetcher.get_india_vix()
     fii_dii = fetcher.get_fii_dii_data()
     gift_nifty = fetcher.get_gift_nifty()
