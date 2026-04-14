@@ -7,7 +7,7 @@ from data_fetcher import NSEFetcher
 from calculations import (
     calculate_straddle, calculate_pcr, calculate_synthetic_futures,
     calculate_pivot_levels, analyze_open_interest, interpret_vix,
-    generate_market_bias, calculate_basis,
+    generate_market_bias, calculate_basis, calculate_max_pain,
 )
 from config import COLOR_BULLISH, COLOR_BEARISH, COLOR_NEUTRAL, COLOR_WARNING
 
@@ -167,6 +167,63 @@ st.markdown("""
         margin-top: 2rem;
     }
 
+    /* OI Dashboard header bar */
+    .oi-header {
+        display: flex; align-items: center; gap: 1.5rem; flex-wrap: wrap;
+        padding: 0.6rem 1rem;
+        background: rgba(0,0,0,0.6);
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 8px;
+        margin-bottom: 0.8rem;
+    }
+    .oi-header .oi-title { font-size: 0.8rem; font-weight: 700; color: #00d4ff; }
+    .oi-header .oi-spot { font-size: 1.2rem; font-weight: 700; color: #00ff88; }
+    .oi-header .oi-metric { font-size: 0.75rem; color: #aaa; }
+    .oi-header .oi-metric span { color: #fff; font-weight: 600; }
+
+    /* Strike selector buttons */
+    .strike-btn {
+        display: inline-block; padding: 0.2rem 0.6rem; margin: 0.15rem;
+        border-radius: 4px; font-size: 0.7rem; font-weight: 600; cursor: pointer;
+        border: 1px solid rgba(255,255,255,0.15); color: #888;
+        background: rgba(255,255,255,0.03);
+    }
+    .strike-btn.active-ce { background: rgba(255,68,68,0.25); color: #ff4444; border-color: #ff4444; }
+    .strike-btn.active-pe { background: rgba(0,255,136,0.25); color: #00ff88; border-color: #00ff88; }
+    .strike-btn.active-atm { background: rgba(0,212,255,0.25); color: #00d4ff; border-color: #00d4ff; }
+
+    /* OI table mirror layout */
+    .oi-full-table { width: 100%; border-collapse: collapse; font-size: 0.75rem; }
+    .oi-full-table th {
+        padding: 0.4rem 0.5rem; text-align: right; color: #00d4ff;
+        border-bottom: 1px solid rgba(255,255,255,0.15); font-weight: 500;
+    }
+    .oi-full-table th.strike-col { text-align: center; }
+    .oi-full-table td {
+        padding: 0.35rem 0.5rem; text-align: right;
+        border-bottom: 1px solid rgba(255,255,255,0.04); color: #ccc;
+    }
+    .oi-full-table td.strike-col {
+        text-align: center; font-weight: 700; color: #fff;
+        border-left: 1px solid rgba(255,255,255,0.1);
+        border-right: 1px solid rgba(255,255,255,0.1);
+        background: rgba(0,212,255,0.03);
+    }
+    .oi-full-table tr.atm-row { background: rgba(0,212,255,0.08); }
+    .oi-full-table tr.atm-row td.strike-col { color: #00d4ff; }
+    .oi-full-table tr.max-ce td { border-left: 2px solid #ff4444; }
+    .oi-full-table tr.max-pe td:last-child { border-right: 2px solid #00ff88; }
+
+    /* Insight panel */
+    .insight-panel {
+        display: flex; gap: 1.5rem; flex-wrap: wrap;
+        padding: 0.8rem 1rem;
+        background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.06);
+        border-radius: 8px; margin-top: 0.8rem;
+    }
+    .insight-panel .insight-item .insight-label { font-size: 0.65rem; color: #888; text-transform: uppercase; letter-spacing: 1px; }
+    .insight-panel .insight-item .insight-value { font-size: 1rem; font-weight: 700; margin-top: 0.15rem; }
+
     /* Hide Streamlit branding */
     #MainMenu { visibility: hidden; }
     footer { visibility: hidden; }
@@ -318,6 +375,7 @@ def main():
     if not futures_price and synthetic:
         futures_price = synthetic["synthetic_price"]
     basis = calculate_basis(futures_price, spot_price) if futures_price and spot_price else None
+    max_pain = calculate_max_pain(nifty_chain) if nifty_chain else None
 
     # ── SECTION 1: MARKET SUMMARY ────────────────────────────────────────
     conf_color = "#00ff88" if market_bias["confidence"] == "High" else "#ffaa00" if market_bias["confidence"] == "Medium" else "#ff4444"
@@ -790,11 +848,286 @@ def main():
 
     st.markdown(glass_card(final_html), unsafe_allow_html=True)
 
+    # ══════════════════════════════════════════════════════════════════════
+    # OI ANALYSIS DASHBOARD
+    # ══════════════════════════════════════════════════════════════════════
+    if nifty_chain and nifty_chain.get("records", {}).get("data"):
+        all_records = nifty_chain["records"]["data"]
+
+        # Build full chain data
+        chain_data = []
+        for r in all_records:
+            strike = r["strikePrice"]
+            ce = r.get("CE")
+            pe = r.get("PE")
+            ce_oi = ce.get("openInterest", 0) if ce else 0
+            pe_oi = pe.get("openInterest", 0) if pe else 0
+            ce_chg = ce.get("changeinOpenInterest", 0) if ce else 0
+            pe_chg = pe.get("changeinOpenInterest", 0) if pe else 0
+            ce_ltp = ce.get("lastPrice", 0) if ce else 0
+            pe_ltp = pe.get("lastPrice", 0) if pe else 0
+            ce_vol = ce.get("totalTradedVolume", 0) if ce else 0
+            pe_vol = pe.get("totalTradedVolume", 0) if pe else 0
+            if ce_oi > 0 or pe_oi > 0:
+                chain_data.append({
+                    "strike": strike, "ce_oi": ce_oi, "pe_oi": pe_oi,
+                    "ce_chg": ce_chg, "pe_chg": pe_chg,
+                    "ce_ltp": ce_ltp, "pe_ltp": pe_ltp,
+                    "ce_vol": ce_vol, "pe_vol": pe_vol,
+                    "pcr": round(pe_oi / ce_oi, 3) if ce_oi > 0 else 0,
+                    "straddle_oi": ce_oi + pe_oi,
+                    "straddle_chg": ce_chg + pe_chg,
+                })
+
+        if chain_data:
+            atm_strike = min([d["strike"] for d in chain_data], key=lambda x: abs(x - spot_price)) if spot_price else chain_data[len(chain_data) // 2]["strike"]
+            total_ce_oi = sum(d["ce_oi"] for d in chain_data)
+            total_pe_oi = sum(d["pe_oi"] for d in chain_data)
+            total_ce_chg = sum(d["ce_chg"] for d in chain_data)
+            total_pe_chg = sum(d["pe_chg"] for d in chain_data)
+            overall_pcr = round(total_pe_oi / total_ce_oi, 3) if total_ce_oi else 0
+            max_ce_strike = max(chain_data, key=lambda d: d["ce_oi"])
+            max_pe_strike = max(chain_data, key=lambda d: d["pe_oi"])
+
+            def fmt_lakh(v):
+                if abs(v) >= 100000:
+                    return f"{v/100000:.2f}L"
+                return f"{v:,.0f}"
+
+            # ── OI HEADER BAR ────────────────────────────────────────────
+            mp_str = f"{max_pain:,.0f}" if max_pain else "N/A"
+            vix_str = f'{vix_data["current"]:.2f} ({vix_data["change"]:+.1f}%)' if vix_data else "N/A"
+            vix_chg_color = "#ff4444" if vix_data and vix_data["change"] > 0 else "#00ff88"
+
+            oi_hdr = '<div class="oi-header">'
+            oi_hdr += '<div class="oi-title">NIFTY OPTION CHAIN</div>'
+            oi_hdr += f'<div class="oi-spot">{spot_price:,.2f}</div>'
+            oi_hdr += f'<div class="oi-metric">PCR <span>{overall_pcr:.3f}</span></div>'
+            oi_hdr += f'<div class="oi-metric">MAX PAIN <span>{mp_str}</span></div>'
+            oi_hdr += f'<div class="oi-metric">CALL OI <span style="color:#ff4444">{fmt_lakh(total_ce_oi)}</span></div>'
+            oi_hdr += f'<div class="oi-metric">PUT OI <span style="color:#00ff88">{fmt_lakh(total_pe_oi)}</span></div>'
+            oi_hdr += f'<div class="oi-metric">VIX <span style="color:{vix_chg_color}">{vix_str}</span></div>'
+            oi_hdr += '</div>'
+
+            # Summary bar
+            oi_hdr += '<div style="display:flex;gap:1.5rem;flex-wrap:wrap;font-size:0.72rem;color:#888;margin-bottom:0.5rem;">'
+            ce_chg_color = "#ff4444" if total_ce_chg > 0 else "#00ff88"
+            pe_chg_color = "#00ff88" if total_pe_chg > 0 else "#ff4444"
+            oi_hdr += f'<span>CE TOTAL OI: <span style="color:#fff">{fmt_lakh(total_ce_oi)}</span> OI CHG: <span style="color:{ce_chg_color}">{fmt_lakh(total_ce_chg)}</span></span>'
+            oi_hdr += f'<span>PE TOTAL OI: <span style="color:#fff">{fmt_lakh(total_pe_oi)}</span> PE CHG: <span style="color:{pe_chg_color}">{fmt_lakh(total_pe_chg)}</span></span>'
+            oi_hdr += f'<span>PCR: <span style="color:#ffaa00">{overall_pcr:.3f}</span></span>'
+            oi_hdr += f'<span>SPOT: <span style="color:#fff">{spot_price:,.2f}</span></span>'
+            oi_hdr += f'<span>MAX PAIN: <span style="color:#fff">{mp_str}</span></span>'
+            oi_hdr += '</div>'
+
+            st.markdown(glass_card(oi_hdr), unsafe_allow_html=True)
+
+            # ── STRIKE SELECTOR + FILTERS ────────────────────────────────
+            margin = 15
+            all_strikes = [d["strike"] for d in chain_data]
+            atm_idx = all_strikes.index(atm_strike) if atm_strike in all_strikes else len(all_strikes) // 2
+            lo = max(0, atm_idx - margin)
+            hi = min(len(all_strikes), atm_idx + margin + 1)
+            visible = chain_data[lo:hi]
+            visible_strikes = [d["strike"] for d in visible]
+
+            col_filter1, col_filter2 = st.columns([3, 1])
+            with col_filter1:
+                num_strikes = st.select_slider("Strikes", options=[10, 15, 20, 25, 30], value=15, key="oi_strikes")
+            with col_filter2:
+                chart_view = st.selectbox("View", ["CE + PE Lines", "Straddle Combined"], key="oi_view")
+
+            # Recalculate visible range with selected strike count
+            half = num_strikes // 2
+            lo = max(0, atm_idx - half)
+            hi = min(len(all_strikes), atm_idx + half + 1)
+            visible = chain_data[lo:hi]
+            visible_strikes = [d["strike"] for d in visible]
+
+            # Strike buttons as HTML
+            btn_html = '<div style="margin-bottom:0.8rem;">'
+            btn_html += '<div style="font-size:0.7rem;color:#666;margin-bottom:0.3rem;">OI BY STRIKE</div>'
+            for d in visible:
+                s = d["strike"]
+                if s == atm_strike:
+                    cls = "strike-btn active-atm"
+                elif s == max_ce_strike["strike"]:
+                    cls = "strike-btn active-ce"
+                elif s == max_pe_strike["strike"]:
+                    cls = "strike-btn active-pe"
+                else:
+                    cls = "strike-btn"
+                btn_html += f'<span class="{cls}">{int(s)}</span>'
+            btn_html += '</div>'
+            st.markdown(btn_html, unsafe_allow_html=True)
+
+            # ── LINE CHART ───────────────────────────────────────────────
+            strike_labels = [str(int(s)) for s in visible_strikes]
+
+            fig_lines = go.Figure()
+
+            if chart_view == "CE + PE Lines":
+                # CE OI line (solid, pink/red)
+                fig_lines.add_trace(go.Scatter(
+                    x=strike_labels,
+                    y=[d["ce_oi"] for d in visible],
+                    name="CE OI", mode="lines+markers",
+                    line=dict(color="#ff4477", width=2.5),
+                    marker=dict(size=5, color="#ff4477"),
+                ))
+                # PE OI line (solid, green)
+                fig_lines.add_trace(go.Scatter(
+                    x=strike_labels,
+                    y=[d["pe_oi"] for d in visible],
+                    name="PE OI", mode="lines+markers",
+                    line=dict(color="#00ff88", width=2.5),
+                    marker=dict(size=5, color="#00ff88"),
+                ))
+                # CE OI Change (dashed, pink)
+                fig_lines.add_trace(go.Scatter(
+                    x=strike_labels,
+                    y=[d["ce_chg"] for d in visible],
+                    name="CE OI Chg", mode="lines+markers",
+                    line=dict(color="#ff4477", width=1.5, dash="dash"),
+                    marker=dict(size=3, color="#ff4477"),
+                    yaxis="y2",
+                ))
+                # PE OI Change (dashed, green)
+                fig_lines.add_trace(go.Scatter(
+                    x=strike_labels,
+                    y=[d["pe_chg"] for d in visible],
+                    name="PE OI Chg", mode="lines+markers",
+                    line=dict(color="#00ff88", width=1.5, dash="dash"),
+                    marker=dict(size=3, color="#00ff88"),
+                    yaxis="y2",
+                ))
+            else:
+                # Straddle combined view
+                fig_lines.add_trace(go.Scatter(
+                    x=strike_labels,
+                    y=[d["straddle_oi"] for d in visible],
+                    name="Straddle OI (CE+PE)", mode="lines+markers",
+                    line=dict(color="#00d4ff", width=2.5),
+                    marker=dict(size=5, color="#00d4ff"),
+                ))
+                fig_lines.add_trace(go.Scatter(
+                    x=strike_labels,
+                    y=[d["straddle_chg"] for d in visible],
+                    name="Straddle OI Chg", mode="lines+markers",
+                    line=dict(color="#ffaa00", width=1.5, dash="dash"),
+                    marker=dict(size=3, color="#ffaa00"),
+                    yaxis="y2",
+                ))
+
+            # ATM vertical line
+            if str(int(atm_strike)) in strike_labels:
+                atm_x = strike_labels.index(str(int(atm_strike)))
+                fig_lines.add_vline(
+                    x=atm_x, line_dash="dash", line_color="#00d4ff", line_width=2,
+                    annotation_text=f"ATM {int(atm_strike)}", annotation_font_color="#00d4ff",
+                    annotation_font_size=10,
+                )
+
+            # Max Pain vertical line
+            if max_pain and str(int(max_pain)) in strike_labels:
+                mp_x = strike_labels.index(str(int(max_pain)))
+                fig_lines.add_vline(
+                    x=mp_x, line_dash="dot", line_color="#ffaa00", line_width=1.5,
+                    annotation_text=f"MaxPain {int(max_pain)}", annotation_font_color="#ffaa00",
+                    annotation_font_size=9, annotation_position="bottom",
+                )
+
+            fig_lines.update_layout(
+                template="plotly_dark",
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="JetBrains Mono, monospace", size=10, color="#aaa"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9)),
+                margin=dict(l=50, r=50, t=30, b=40),
+                height=420,
+                xaxis=dict(title="Strike Price", gridcolor="rgba(255,255,255,0.05)", tickangle=-45),
+                yaxis=dict(title="Open Interest", gridcolor="rgba(255,255,255,0.05)", side="left"),
+                yaxis2=dict(title="OI Change", overlaying="y", side="right", gridcolor="rgba(255,255,255,0.03)"),
+                hovermode="x unified",
+            )
+            st.plotly_chart(fig_lines, use_container_width=True, key="oi_line_chart")
+
+            # ── FULL OPTION CHAIN TABLE (mirror layout) ──────────────────
+            tbl = '<div style="max-height:450px; overflow-y:auto; border:1px solid rgba(255,255,255,0.06); border-radius:8px;">'
+            tbl += '<table class="oi-full-table">'
+            tbl += '<tr>'
+            tbl += '<th>CE LTP</th><th>CE Vol</th><th>CE ΔOI</th><th>CE OI</th>'
+            tbl += '<th class="strike-col">STRIKE</th>'
+            tbl += '<th>PE OI</th><th>PE ΔOI</th><th>PE Vol</th><th>PE LTP</th>'
+            tbl += '</tr>'
+
+            for d in visible:
+                s = d["strike"]
+                row_cls = ""
+                if s == atm_strike:
+                    row_cls = ' class="atm-row"'
+                elif s == max_ce_strike["strike"]:
+                    row_cls = ' class="max-ce"'
+                elif s == max_pe_strike["strike"]:
+                    row_cls = ' class="max-pe"'
+
+                ce_oi_style = ' style="color:#ff4444;font-weight:600"' if s == max_ce_strike["strike"] else ""
+                pe_oi_style = ' style="color:#00ff88;font-weight:600"' if s == max_pe_strike["strike"] else ""
+                ce_chg_cls = "highlight-red" if d["ce_chg"] > 0 else "highlight-green" if d["ce_chg"] < 0 else ""
+                pe_chg_cls = "highlight-green" if d["pe_chg"] > 0 else "highlight-red" if d["pe_chg"] < 0 else ""
+
+                atm_marker = " ◄" if s == atm_strike else ""
+
+                tbl += f'<tr{row_cls}>'
+                tbl += f'<td>{d["ce_ltp"]:,.2f}</td>'
+                tbl += f'<td>{d["ce_vol"]:,}</td>'
+                tbl += f'<td class="{ce_chg_cls}">{d["ce_chg"]:+,}</td>'
+                tbl += f'<td{ce_oi_style}>{d["ce_oi"]:,}</td>'
+                tbl += f'<td class="strike-col">{int(s):,}{atm_marker}</td>'
+                tbl += f'<td{pe_oi_style}>{d["pe_oi"]:,}</td>'
+                tbl += f'<td class="{pe_chg_cls}">{d["pe_chg"]:+,}</td>'
+                tbl += f'<td>{d["pe_vol"]:,}</td>'
+                tbl += f'<td>{d["pe_ltp"]:,.2f}</td>'
+                tbl += '</tr>'
+
+            tbl += '</table></div>'
+            st.markdown(glass_card(tbl), unsafe_allow_html=True)
+
+            # ── INSIGHT PANEL ────────────────────────────────────────────
+            oi_imbalance = total_pe_oi - total_ce_oi
+            if oi_imbalance > 0:
+                signal_text = "PE HEAVY → BULLISH"
+                signal_color = "#00ff88"
+            else:
+                signal_text = "CE HEAVY → BEARISH"
+                signal_color = "#ff4444"
+
+            insight = '<div class="insight-panel">'
+            insight += '<div class="insight-item"><div class="insight-label">Resistance</div>'
+            insight += f'<div class="insight-value" style="color:#ff4444">{int(max_ce_strike["strike"]):,} ({fmt_lakh(max_ce_strike["ce_oi"])})</div></div>'
+            insight += '<div class="insight-item"><div class="insight-label">Support</div>'
+            insight += f'<div class="insight-value" style="color:#00ff88">{int(max_pe_strike["strike"]):,} ({fmt_lakh(max_pe_strike["pe_oi"])})</div></div>'
+            insight += '<div class="insight-item"><div class="insight-label">Max Pain</div>'
+            insight += f'<div class="insight-value" style="color:#ffaa00">{mp_str}</div></div>'
+            insight += '<div class="insight-item"><div class="insight-label">OI Signal</div>'
+            insight += f'<div class="insight-value" style="color:{signal_color}">{signal_text}</div></div>'
+            insight += '</div>'
+
+            # CE/PE buildup zones
+            ce_top2 = sorted(visible, key=lambda d: d["ce_oi"], reverse=True)[:2]
+            pe_top2 = sorted(visible, key=lambda d: d["pe_oi"], reverse=True)[:2]
+            insight += '<div style="margin-top:0.5rem; font-size:0.72rem; color:#888;">'
+            insight += f'<div>CE OI Buildup: <span style="color:#ff4444">{int(ce_top2[0]["strike"]):,}–{int(ce_top2[1]["strike"]):,}</span> zone → Strong writing = Resistance ceiling</div>'
+            insight += f'<div>PE OI Buildup: <span style="color:#00ff88">{int(pe_top2[0]["strike"]):,}–{int(pe_top2[1]["strike"]):,}</span> zone → Strong writing = Support floor</div>'
+            insight += '</div>'
+
+            st.markdown(glass_card(insight), unsafe_allow_html=True)
+
     # ── Disclaimer ───────────────────────────────────────────────────────
     st.markdown("""
     <div class="disclaimer">
         This dashboard is for educational and informational purposes only. Not SEBI-registered investment advice.
-        Derivatives trading involves substantial risk. Data sourced from NSE India. Consult a SEBI-registered advisor.
+        Derivatives trading involves substantial risk. Data sourced from Groww &amp; Yahoo Finance. Consult a SEBI-registered advisor.
     </div>
     """, unsafe_allow_html=True)
 

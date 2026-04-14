@@ -216,6 +216,41 @@ def analyze_open_interest(option_chain_data, top_n=5):
     }
 
 
+def calculate_max_pain(option_chain_data):
+    """Calculate Max Pain — strike where total loss for option buyers is maximum."""
+    if not option_chain_data:
+        return None
+    records = option_chain_data.get("records", {}).get("data", [])
+    strikes = []
+    for r in records:
+        ce = r.get("CE")
+        pe = r.get("PE")
+        if ce or pe:
+            strikes.append({
+                "strike": r["strikePrice"],
+                "ce_oi": ce.get("openInterest", 0) if ce else 0,
+                "pe_oi": pe.get("openInterest", 0) if pe else 0,
+            })
+    if not strikes:
+        return None
+
+    min_pain = float("inf")
+    max_pain_strike = 0
+    for target in strikes:
+        total_pain = 0
+        for s in strikes:
+            # CE buyers lose if strike < target
+            if s["strike"] < target["strike"]:
+                total_pain += s["ce_oi"] * (target["strike"] - s["strike"])
+            # PE buyers lose if strike > target
+            if s["strike"] > target["strike"]:
+                total_pain += s["pe_oi"] * (s["strike"] - target["strike"])
+        if total_pain < min_pain:
+            min_pain = total_pain
+            max_pain_strike = target["strike"]
+    return max_pain_strike
+
+
 def interpret_vix(current_vix, prev_vix):
     """Interpret India VIX reading."""
     change_pct = ((current_vix - prev_vix) / prev_vix * 100) if prev_vix else 0
