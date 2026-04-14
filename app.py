@@ -1123,6 +1123,132 @@ def main():
 
             st.markdown(glass_card(insight), unsafe_allow_html=True)
 
+            # ── MULTI-STRIKE OI COMPARISON ───────────────────────────────
+            st.markdown(glass_card(section_title("MULTI-STRIKE OI COMPARISON")), unsafe_allow_html=True)
+
+            # Color palette for selected strikes
+            STRIKE_COLORS = [
+                "#ff4477", "#00ff88", "#00d4ff", "#ffaa00", "#ff6633",
+                "#aa66ff", "#66ffcc", "#ff66aa", "#33ccff", "#ffff44",
+            ]
+
+            # Default: ATM ± 2 key strikes + max CE/PE
+            default_strikes = set()
+            default_strikes.add(atm_strike)
+            if max_ce_strike:
+                default_strikes.add(max_ce_strike["strike"])
+            if max_pe_strike:
+                default_strikes.add(max_pe_strike["strike"])
+            # Add ATM ± 1-2 intervals
+            for d in chain_data:
+                if abs(d["strike"] - atm_strike) <= 200:
+                    default_strikes.add(d["strike"])
+                if len(default_strikes) >= 5:
+                    break
+
+            all_strike_opts = [int(d["strike"]) for d in chain_data]
+            default_list = sorted([int(s) for s in default_strikes if int(s) in all_strike_opts])
+
+            selected = st.multiselect(
+                "Select strikes to compare",
+                options=all_strike_opts,
+                default=default_list[:6],
+                key="multi_strike_select",
+            )
+
+            if selected:
+                sel_data = [d for d in chain_data if int(d["strike"]) in selected]
+                sel_data.sort(key=lambda d: d["strike"])
+
+                # ── Chart 1: CE vs PE OI per selected strike (grouped bar) ──
+                fig_ms = go.Figure()
+                strike_labels = [str(int(d["strike"])) for d in sel_data]
+
+                fig_ms.add_trace(go.Bar(
+                    x=strike_labels,
+                    y=[d["ce_oi"] for d in sel_data],
+                    name="CE OI",
+                    marker_color="#ff4477",
+                    opacity=0.9,
+                ))
+                fig_ms.add_trace(go.Bar(
+                    x=strike_labels,
+                    y=[d["pe_oi"] for d in sel_data],
+                    name="PE OI",
+                    marker_color="#00ff88",
+                    opacity=0.9,
+                ))
+
+                # ATM marker
+                atm_label = str(int(atm_strike))
+                if atm_label in strike_labels:
+                    fig_ms.add_vline(
+                        x=strike_labels.index(atm_label),
+                        line_dash="dash", line_color="#00d4ff", line_width=2,
+                        annotation_text=f"ATM {atm_label}",
+                        annotation_font_color="#00d4ff", annotation_font_size=10,
+                    )
+
+                fig_ms.update_layout(
+                    barmode="group",
+                    template="plotly_dark",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(family="JetBrains Mono, monospace", size=10, color="#aaa"),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9)),
+                    margin=dict(l=50, r=20, t=30, b=40),
+                    height=350,
+                    xaxis=dict(title="Strike", gridcolor="rgba(255,255,255,0.05)"),
+                    yaxis=dict(title="Open Interest", gridcolor="rgba(255,255,255,0.05)"),
+                )
+                st.plotly_chart(fig_ms, use_container_width=True, key="ms_bar")
+
+                # ── Chart 2: Individual strike lines (CE solid, PE dashed) ──
+                fig_lines2 = go.Figure()
+                for i, d in enumerate(sel_data):
+                    color = STRIKE_COLORS[i % len(STRIKE_COLORS)]
+                    label = str(int(d["strike"]))
+                    is_atm = d["strike"] == atm_strike
+
+                    fig_lines2.add_trace(go.Bar(
+                        x=["CE OI", "PE OI", "CE ΔOI", "PE ΔOI"],
+                        y=[d["ce_oi"], d["pe_oi"], d["ce_chg"], d["pe_chg"]],
+                        name=label + (" ◄ATM" if is_atm else ""),
+                        marker_color=color,
+                        opacity=0.85,
+                    ))
+
+                fig_lines2.update_layout(
+                    barmode="group",
+                    template="plotly_dark",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(family="JetBrains Mono, monospace", size=10, color="#aaa"),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="center", x=0.5, font=dict(size=9)),
+                    margin=dict(l=50, r=20, t=40, b=40),
+                    height=350,
+                    xaxis=dict(gridcolor="rgba(255,255,255,0.05)"),
+                    yaxis=dict(title="Value", gridcolor="rgba(255,255,255,0.05)"),
+                )
+                st.plotly_chart(fig_lines2, use_container_width=True, key="ms_compare")
+
+                # ── Quick insight for selected strikes ───────────────────
+                ms_insight = '<div style="display:flex;gap:1rem;flex-wrap:wrap;font-size:0.72rem;">'
+                for i, d in enumerate(sel_data):
+                    color = STRIKE_COLORS[i % len(STRIKE_COLORS)]
+                    pcr_val = f"{d['pcr']:.2f}" if d['pcr'] else "∞"
+                    ce_arrow = "▲" if d["ce_chg"] > 0 else "▼"
+                    pe_arrow = "▲" if d["pe_chg"] > 0 else "▼"
+                    atm_tag = " ◄ATM" if d["strike"] == atm_strike else ""
+                    ms_insight += f'<div style="padding:0.4rem 0.6rem;background:rgba(255,255,255,0.03);border-left:3px solid {color};border-radius:4px;min-width:140px;">'
+                    ms_insight += f'<div style="color:{color};font-weight:700;">{int(d["strike"]):,}{atm_tag}</div>'
+                    ms_insight += f'<div style="color:#aaa;">CE: {d["ce_oi"]:,} <span style="color:{"#ff4444" if d["ce_chg"]>0 else "#00ff88"}">{ce_arrow}{abs(d["ce_chg"]):,}</span></div>'
+                    ms_insight += f'<div style="color:#aaa;">PE: {d["pe_oi"]:,} <span style="color:{"#00ff88" if d["pe_chg"]>0 else "#ff4444"}">{pe_arrow}{abs(d["pe_chg"]):,}</span></div>'
+                    ms_insight += f'<div style="color:#ffaa00;">PCR: {pcr_val}</div>'
+                    ms_insight += '</div>'
+                ms_insight += '</div>'
+                st.markdown(glass_card(ms_insight), unsafe_allow_html=True)
+
     # ── Disclaimer ───────────────────────────────────────────────────────
     st.markdown("""
     <div class="disclaimer">
