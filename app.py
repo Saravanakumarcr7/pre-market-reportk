@@ -1170,6 +1170,76 @@ def main():
                             f"{int(d['strike']):,}", default_c, key=f"clr_{int(d['strike'])}"
                         )
 
+                # ── Store OI snapshot for time evolution ─────────────────
+                if "oi_history" not in st.session_state:
+                    st.session_state.oi_history = []
+
+                now_ts = datetime.now().strftime("%H:%M")
+                # Avoid duplicate timestamps (only store if new minute)
+                last_ts = st.session_state.oi_history[-1]["time"] if st.session_state.oi_history else None
+                if now_ts != last_ts:
+                    snapshot = {"time": now_ts}
+                    for d in chain_data:
+                        s = int(d["strike"])
+                        snapshot[f"{s}_ce"] = d["ce_oi"]
+                        snapshot[f"{s}_pe"] = d["pe_oi"]
+                    st.session_state.oi_history.append(snapshot)
+
+                # ── OI EVOLUTION OVER TIME (X=time, lines per strike) ────
+                history = st.session_state.oi_history
+                if len(history) >= 1:
+                    time_labels = [h["time"] for h in history]
+
+                    fig_evo = go.Figure()
+                    for i, d in enumerate(sel_data):
+                        s = int(d["strike"])
+                        color = user_colors.get(s, STRIKE_COLORS[i % len(STRIKE_COLORS)])
+                        label = str(s)
+                        atm_tag = " ATM" if d["strike"] == atm_strike else ""
+
+                        ce_vals = [h.get(f"{s}_ce", 0) for h in history]
+                        pe_vals = [h.get(f"{s}_pe", 0) for h in history]
+
+                        # CE - solid line
+                        fig_evo.add_trace(go.Scatter(
+                            x=time_labels, y=ce_vals,
+                            mode="lines+markers", name=f"{label}{atm_tag} CE",
+                            line=dict(color=color, width=2),
+                            marker=dict(size=4, color=color),
+                        ))
+                        # PE - dashed line
+                        fig_evo.add_trace(go.Scatter(
+                            x=time_labels, y=pe_vals,
+                            mode="lines+markers", name=f"{label}{atm_tag} PE",
+                            line=dict(color=color, width=2, dash="dash"),
+                            marker=dict(size=4, color=color, symbol="diamond"),
+                        ))
+
+                    # Spot price as annotation
+                    fig_evo.add_annotation(
+                        x=time_labels[-1], y=1.05, xref="x", yref="paper",
+                        text=f"Spot: {spot_price:,.2f}", showarrow=False,
+                        font=dict(color="#00d4ff", size=10),
+                    )
+
+                    fig_evo.update_layout(
+                        title=dict(text="OI EVOLUTION BY STRIKE (SELECT STRIKES TO COMPARE)", font=dict(size=12, color="#00d4ff")),
+                        template="plotly_dark",
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(family="JetBrains Mono, monospace", size=10, color="#aaa"),
+                        legend=dict(orientation="v", yanchor="top", y=1, xanchor="left", x=1.02, font=dict(size=8)),
+                        margin=dict(l=50, r=120, t=40, b=40),
+                        height=420,
+                        xaxis=dict(title="Time", gridcolor="rgba(255,255,255,0.05)"),
+                        yaxis=dict(title="Open Interest", gridcolor="rgba(255,255,255,0.05)"),
+                        hovermode="x unified",
+                    )
+                    st.plotly_chart(fig_evo, use_container_width=True, key="ms_evo")
+
+                    if len(history) < 3:
+                        st.caption("Chart builds up as data refreshes. Enable auto-refresh (sidebar) or click Refresh to add data points.")
+
                 # ── Chart 1: CE vs PE OI per selected strike (grouped bar) ──
                 fig_ms = go.Figure()
                 strike_labels = [str(int(d["strike"])) for d in sel_data]
@@ -1213,78 +1283,7 @@ def main():
                 )
                 st.plotly_chart(fig_ms, use_container_width=True, key="ms_bar")
 
-                # ── Line Chart: CE solid + PE dashed per strike ──────────
-                fig_ml = go.Figure()
-                for i, d in enumerate(sel_data):
-                    color = user_colors.get(int(d["strike"]), STRIKE_COLORS[i % len(STRIKE_COLORS)])
-                    label = str(int(d["strike"]))
-                    atm_tag = " ATM" if d["strike"] == atm_strike else ""
-                    # CE OI - solid line
-                    fig_ml.add_trace(go.Scatter(
-                        x=strike_labels, y=[d["ce_oi"] if sd == d else None for sd in sel_data],
-                        mode="markers", marker=dict(size=12, color=color, symbol="circle"),
-                        name=f"{label}{atm_tag} CE", showlegend=False,
-                    ))
-                    # PE OI - diamond marker
-                    fig_ml.add_trace(go.Scatter(
-                        x=strike_labels, y=[d["pe_oi"] if sd == d else None for sd in sel_data],
-                        mode="markers", marker=dict(size=12, color=color, symbol="diamond"),
-                        name=f"{label}{atm_tag} PE", showlegend=False,
-                    ))
-
-                # CE OI connected line across all selected strikes
-                fig_ml.add_trace(go.Scatter(
-                    x=strike_labels, y=[d["ce_oi"] for d in sel_data],
-                    mode="lines+markers", name="CE OI",
-                    line=dict(color="#ff4477", width=2.5),
-                    marker=dict(size=6, color="#ff4477"),
-                ))
-                fig_ml.add_trace(go.Scatter(
-                    x=strike_labels, y=[d["pe_oi"] for d in sel_data],
-                    mode="lines+markers", name="PE OI",
-                    line=dict(color="#00ff88", width=2.5, dash="dash"),
-                    marker=dict(size=6, color="#00ff88"),
-                ))
-                fig_ml.add_trace(go.Scatter(
-                    x=strike_labels, y=[d["ce_chg"] for d in sel_data],
-                    mode="lines+markers", name="CE ΔOI",
-                    line=dict(color="#ff4477", width=1.2, dash="dot"),
-                    marker=dict(size=4, color="#ff4477"),
-                    yaxis="y2",
-                ))
-                fig_ml.add_trace(go.Scatter(
-                    x=strike_labels, y=[d["pe_chg"] for d in sel_data],
-                    mode="lines+markers", name="PE ΔOI",
-                    line=dict(color="#00ff88", width=1.2, dash="dot"),
-                    marker=dict(size=4, color="#00ff88"),
-                    yaxis="y2",
-                ))
-
-                # ATM marker
-                if atm_label in strike_labels:
-                    fig_ml.add_vline(
-                        x=strike_labels.index(atm_label),
-                        line_dash="dash", line_color="#00d4ff", line_width=2,
-                        annotation_text=f"ATM {atm_label}",
-                        annotation_font_color="#00d4ff", annotation_font_size=10,
-                    )
-
-                fig_ml.update_layout(
-                    template="plotly_dark",
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    font=dict(family="JetBrains Mono, monospace", size=10, color="#aaa"),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9)),
-                    margin=dict(l=50, r=50, t=30, b=40),
-                    height=400,
-                    xaxis=dict(title="Strike Price", gridcolor="rgba(255,255,255,0.05)"),
-                    yaxis=dict(title="Open Interest", gridcolor="rgba(255,255,255,0.05)", side="left"),
-                    yaxis2=dict(title="OI Change", overlaying="y", side="right", gridcolor="rgba(255,255,255,0.03)"),
-                    hovermode="x unified",
-                )
-                st.plotly_chart(fig_ml, use_container_width=True, key="ms_line")
-
-                # ── Chart 2: Individual strike lines (CE solid, PE dashed) ──
+                # ── Chart 2: Individual strike comparison ────────────────
                 fig_lines2 = go.Figure()
                 for i, d in enumerate(sel_data):
                     color = STRIKE_COLORS[i % len(STRIKE_COLORS)]
@@ -1345,8 +1344,18 @@ def main():
         if st.button("Refresh Data", use_container_width=True):
             st.cache_data.clear()
             st.rerun()
+        auto_refresh = st.checkbox("Auto-refresh (5 min)", value=False, key="auto_ref")
         st.markdown(f"**Cache TTL:** 5 min")
         st.markdown(f"**Last fetch:** {data['timestamp']}")
+        oi_pts = len(st.session_state.get("oi_history", []))
+        st.markdown(f"**OI snapshots:** {oi_pts}")
+        if st.button("Clear OI History", use_container_width=True):
+            st.session_state.oi_history = []
+            st.rerun()
+
+    # Auto-refresh via meta tag
+    if auto_refresh:
+        st.markdown('<meta http-equiv="refresh" content="300">', unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
