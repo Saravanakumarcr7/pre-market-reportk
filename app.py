@@ -1160,6 +1160,16 @@ def main():
                 sel_data = [d for d in chain_data if int(d["strike"]) in selected]
                 sel_data.sort(key=lambda d: d["strike"])
 
+                # Color pickers per strike
+                color_cols = st.columns(min(len(sel_data), 6))
+                user_colors = {}
+                for i, d in enumerate(sel_data[:6]):
+                    with color_cols[i % len(color_cols)]:
+                        default_c = STRIKE_COLORS[i % len(STRIKE_COLORS)]
+                        user_colors[int(d["strike"])] = st.color_picker(
+                            f"{int(d['strike']):,}", default_c, key=f"clr_{int(d['strike'])}"
+                        )
+
                 # ── Chart 1: CE vs PE OI per selected strike (grouped bar) ──
                 fig_ms = go.Figure()
                 strike_labels = [str(int(d["strike"])) for d in sel_data]
@@ -1203,6 +1213,77 @@ def main():
                 )
                 st.plotly_chart(fig_ms, use_container_width=True, key="ms_bar")
 
+                # ── Line Chart: CE solid + PE dashed per strike ──────────
+                fig_ml = go.Figure()
+                for i, d in enumerate(sel_data):
+                    color = user_colors.get(int(d["strike"]), STRIKE_COLORS[i % len(STRIKE_COLORS)])
+                    label = str(int(d["strike"]))
+                    atm_tag = " ATM" if d["strike"] == atm_strike else ""
+                    # CE OI - solid line
+                    fig_ml.add_trace(go.Scatter(
+                        x=strike_labels, y=[d["ce_oi"] if sd == d else None for sd in sel_data],
+                        mode="markers", marker=dict(size=12, color=color, symbol="circle"),
+                        name=f"{label}{atm_tag} CE", showlegend=False,
+                    ))
+                    # PE OI - diamond marker
+                    fig_ml.add_trace(go.Scatter(
+                        x=strike_labels, y=[d["pe_oi"] if sd == d else None for sd in sel_data],
+                        mode="markers", marker=dict(size=12, color=color, symbol="diamond"),
+                        name=f"{label}{atm_tag} PE", showlegend=False,
+                    ))
+
+                # CE OI connected line across all selected strikes
+                fig_ml.add_trace(go.Scatter(
+                    x=strike_labels, y=[d["ce_oi"] for d in sel_data],
+                    mode="lines+markers", name="CE OI",
+                    line=dict(color="#ff4477", width=2.5),
+                    marker=dict(size=6, color="#ff4477"),
+                ))
+                fig_ml.add_trace(go.Scatter(
+                    x=strike_labels, y=[d["pe_oi"] for d in sel_data],
+                    mode="lines+markers", name="PE OI",
+                    line=dict(color="#00ff88", width=2.5, dash="dash"),
+                    marker=dict(size=6, color="#00ff88"),
+                ))
+                fig_ml.add_trace(go.Scatter(
+                    x=strike_labels, y=[d["ce_chg"] for d in sel_data],
+                    mode="lines+markers", name="CE ΔOI",
+                    line=dict(color="#ff4477", width=1.2, dash="dot"),
+                    marker=dict(size=4, color="#ff4477"),
+                    yaxis="y2",
+                ))
+                fig_ml.add_trace(go.Scatter(
+                    x=strike_labels, y=[d["pe_chg"] for d in sel_data],
+                    mode="lines+markers", name="PE ΔOI",
+                    line=dict(color="#00ff88", width=1.2, dash="dot"),
+                    marker=dict(size=4, color="#00ff88"),
+                    yaxis="y2",
+                ))
+
+                # ATM marker
+                if atm_label in strike_labels:
+                    fig_ml.add_vline(
+                        x=strike_labels.index(atm_label),
+                        line_dash="dash", line_color="#00d4ff", line_width=2,
+                        annotation_text=f"ATM {atm_label}",
+                        annotation_font_color="#00d4ff", annotation_font_size=10,
+                    )
+
+                fig_ml.update_layout(
+                    template="plotly_dark",
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(family="JetBrains Mono, monospace", size=10, color="#aaa"),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9)),
+                    margin=dict(l=50, r=50, t=30, b=40),
+                    height=400,
+                    xaxis=dict(title="Strike Price", gridcolor="rgba(255,255,255,0.05)"),
+                    yaxis=dict(title="Open Interest", gridcolor="rgba(255,255,255,0.05)", side="left"),
+                    yaxis2=dict(title="OI Change", overlaying="y", side="right", gridcolor="rgba(255,255,255,0.03)"),
+                    hovermode="x unified",
+                )
+                st.plotly_chart(fig_ml, use_container_width=True, key="ms_line")
+
                 # ── Chart 2: Individual strike lines (CE solid, PE dashed) ──
                 fig_lines2 = go.Figure()
                 for i, d in enumerate(sel_data):
@@ -1210,11 +1291,12 @@ def main():
                     label = str(int(d["strike"]))
                     is_atm = d["strike"] == atm_strike
 
+                    uc = user_colors.get(int(d["strike"]), color)
                     fig_lines2.add_trace(go.Bar(
                         x=["CE OI", "PE OI", "CE ΔOI", "PE ΔOI"],
                         y=[d["ce_oi"], d["pe_oi"], d["ce_chg"], d["pe_chg"]],
                         name=label + (" ◄ATM" if is_atm else ""),
-                        marker_color=color,
+                        marker_color=uc,
                         opacity=0.85,
                     ))
 
@@ -1235,7 +1317,7 @@ def main():
                 # ── Quick insight for selected strikes ───────────────────
                 ms_insight = '<div style="display:flex;gap:1rem;flex-wrap:wrap;font-size:0.72rem;">'
                 for i, d in enumerate(sel_data):
-                    color = STRIKE_COLORS[i % len(STRIKE_COLORS)]
+                    color = user_colors.get(int(d["strike"]), STRIKE_COLORS[i % len(STRIKE_COLORS)])
                     pcr_val = f"{d['pcr']:.2f}" if d['pcr'] else "∞"
                     ce_arrow = "▲" if d["ce_chg"] > 0 else "▼"
                     pe_arrow = "▲" if d["pe_chg"] > 0 else "▼"
