@@ -217,7 +217,7 @@ def analyze_open_interest(option_chain_data, top_n=5):
 
 
 def calculate_max_pain(option_chain_data):
-    """Calculate Max Pain — strike where total loss for option buyers is maximum."""
+    """Calculate Max Pain strike where total loss for option buyers is maximum."""
     if not option_chain_data:
         return None
     records = option_chain_data.get("records", {}).get("data", [])
