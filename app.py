@@ -3,6 +3,8 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, time as dtime
+import json as _json
+import os as _os
 from data_fetcher import NSEFetcher
 from calculations import (
     calculate_straddle, calculate_pcr, calculate_synthetic_futures,
@@ -1170,23 +1172,57 @@ def main():
                             f"{int(d['strike']):,}", default_c, key=f"clr_{int(d['strike'])}"
                         )
 
-                # ── Store OI snapshot for time evolution ─────────────────
-                if "oi_history" not in st.session_state:
-                    st.session_state.oi_history = []
+                # ── Persistent OI storage (file-based) ──────────────────
+                OI_DATA_DIR = _os.path.join(_os.path.dirname(__file__), "oi_data")
+                _os.makedirs(OI_DATA_DIR, exist_ok=True)
+                today_str = datetime.now().strftime("%Y-%m-%d")
+                oi_file = _os.path.join(OI_DATA_DIR, f"oi_{today_str}.json")
 
+                # Load existing history from file
+                if _os.path.exists(oi_file):
+                    with open(oi_file, "r") as f:
+                        history = _json.load(f)
+                else:
+                    history = []
+
+                # Add new snapshot if new minute
                 now_ts = datetime.now().strftime("%H:%M")
-                # Avoid duplicate timestamps (only store if new minute)
-                last_ts = st.session_state.oi_history[-1]["time"] if st.session_state.oi_history else None
+                last_ts = history[-1]["time"] if history else None
                 if now_ts != last_ts:
                     snapshot = {"time": now_ts}
                     for d in chain_data:
                         s = int(d["strike"])
                         snapshot[f"{s}_ce"] = d["ce_oi"]
                         snapshot[f"{s}_pe"] = d["pe_oi"]
-                    st.session_state.oi_history.append(snapshot)
+                    history.append(snapshot)
+                    with open(oi_file, "w") as f:
+                        _json.dump(history, f)
+
+                # Also sync to session_state for sidebar display
+                st.session_state.oi_history = history
+
+                # List available historical dates
+                oi_files = sorted([
+                    f.replace("oi_", "").replace(".json", "")
+                    for f in _os.listdir(OI_DATA_DIR)
+                    if f.startswith("oi_") and f.endswith(".json")
+                ], reverse=True)
+
+                # Date selector for historical data
+                view_date = st.selectbox(
+                    "View OI history for date",
+                    options=oi_files if oi_files else [today_str],
+                    index=0,
+                    key="oi_date_select",
+                )
+
+                # Load selected date's history
+                sel_file = _os.path.join(OI_DATA_DIR, f"oi_{view_date}.json")
+                if _os.path.exists(sel_file):
+                    with open(sel_file, "r") as f:
+                        history = _json.load(f)
 
                 # ── OI EVOLUTION OVER TIME (X=time, lines per strike) ────
-                history = st.session_state.oi_history
                 if len(history) >= 1:
                     time_labels = [h["time"] for h in history]
 
@@ -1349,7 +1385,13 @@ def main():
         st.markdown(f"**Last fetch:** {data['timestamp']}")
         oi_pts = len(st.session_state.get("oi_history", []))
         st.markdown(f"**OI snapshots:** {oi_pts}")
-        if st.button("Clear OI History", use_container_width=True):
+        if st.button("Clear Today's OI", use_container_width=True):
+            today_file = _os.path.join(
+                _os.path.dirname(__file__), "oi_data",
+                f"oi_{datetime.now().strftime('%Y-%m-%d')}.json",
+            )
+            if _os.path.exists(today_file):
+                _os.remove(today_file)
             st.session_state.oi_history = []
             st.rerun()
 
