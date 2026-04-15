@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, timezone, timedelta
 import json as _json
 import os as _os
 from data_fetcher import NSEFetcher
@@ -14,9 +14,12 @@ from calculations import (
 from config import COLOR_BULLISH, COLOR_BEARISH, COLOR_NEUTRAL, COLOR_WARNING
 
 
+IST = timezone(timedelta(hours=5, minutes=30))
+
+
 def get_market_status():
     """Check if Indian market is open, pre-market, or closed."""
-    now = datetime.now()
+    now = datetime.now(IST)
     weekday = now.weekday()  # 0=Mon, 6=Sun
     current_time = now.time()
 
@@ -295,7 +298,7 @@ def load_all_data():
         "fii_dii": fii_dii,
         "gift_nifty": gift_nifty,
         "nifty_futures": nifty_futures,
-        "timestamp": datetime.now().strftime("%d %b %Y, %I:%M %p"),
+        "timestamp": datetime.now(IST).strftime("%d %b %Y, %I:%M %p IST"),
     }
 
 
@@ -317,8 +320,6 @@ def main():
     g_val = int(hex_c[2:4], 16)
     b_val = int(hex_c[4:6], 16)
     rgba_bg = f"rgba({r_val},{g_val},{b_val},0.15)"
-    now_str = datetime.now().strftime("%d %b %Y, %I:%M %p")
-
     hdr = '<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;">'
     hdr += '<div>'
     hdr += '<div style="font-size:1.4rem;font-weight:700;color:#00d4ff;">PRE-MARKET DERIVATIVES DASHBOARD</div>'
@@ -329,10 +330,30 @@ def main():
     hdr += '<span style="font-size:0.7rem;color:' + status_color + ';font-weight:600;">' + mkt_status + '</span>'
     hdr += '</div>'
     hdr += '<div style="font-size:0.7rem;color:#666;">' + mkt_msg + '</div>'
-    hdr += '<div style="font-size:0.75rem;color:#aaa;margin-top:0.2rem;">' + now_str + '</div>'
     hdr += '</div></div>'
 
     st.markdown(glass_card(hdr), unsafe_allow_html=True)
+
+    # Live clock (IST) using components.html so JS executes
+    import streamlit.components.v1 as components
+    components.html(
+        """
+        <div id="clk" style="text-align:right;font-family:'JetBrains Mono',monospace;font-size:13px;color:#aaa;padding:2px 8px;"></div>
+        <script>
+        function tick(){
+            var d=new Date(new Date().toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));
+            var h=d.getHours(),ap=h>=12?"PM":"AM";h=h%12||12;
+            var m=String(d.getMinutes()).padStart(2,"0");
+            var s=String(d.getSeconds()).padStart(2,"0");
+            var mn=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+            document.getElementById("clk").innerText=
+                String(d.getDate()).padStart(2,"0")+" "+mn[d.getMonth()]+" "+d.getFullYear()+", "+h+":"+m+":"+s+" "+ap+" IST";
+        }
+        tick();setInterval(tick,1000);
+        </script>
+        """,
+        height=30,
+    )
 
     # Load data
     with st.spinner("Fetching live market data..."):
