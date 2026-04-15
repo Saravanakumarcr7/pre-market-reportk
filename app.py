@@ -1196,7 +1196,7 @@ def main():
                 # ── Persistent OI storage (file-based) ──────────────────
                 OI_DATA_DIR = _os.path.join(_os.path.dirname(__file__), "oi_data")
                 _os.makedirs(OI_DATA_DIR, exist_ok=True)
-                today_str = datetime.now().strftime("%Y-%m-%d")
+                today_str = datetime.now(IST).strftime("%Y-%m-%d")
                 oi_file = _os.path.join(OI_DATA_DIR, f"oi_{today_str}.json")
 
                 # Load existing history from file
@@ -1207,7 +1207,7 @@ def main():
                     history = []
 
                 # Add new snapshot if new minute
-                now_ts = datetime.now().strftime("%H:%M")
+                now_ts = datetime.now(IST).strftime("%H:%M")
                 last_ts = history[-1]["time"] if history else None
                 if now_ts != last_ts:
                     snapshot = {"time": now_ts}
@@ -1409,7 +1409,7 @@ def main():
         if st.button("Clear Today's OI", use_container_width=True):
             today_file = _os.path.join(
                 _os.path.dirname(__file__), "oi_data",
-                f"oi_{datetime.now().strftime('%Y-%m-%d')}.json",
+                f"oi_{datetime.now(IST).strftime('%Y-%m-%d')}.json",
             )
             if _os.path.exists(today_file):
                 _os.remove(today_file)
